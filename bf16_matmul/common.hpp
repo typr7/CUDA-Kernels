@@ -12,6 +12,13 @@ inline constexpr uint32_t MMA_M = 16;
 inline constexpr uint32_t MMA_N = 8;
 inline constexpr uint32_t MMA_K = 16;
 
+template <typename ToType, typename FromType>
+__device__ __forceinline__
+ToType& as(FromType* p)
+{
+    return *reinterpret_cast<ToType*>(p);
+}
+
 __device__ __host__ __forceinline__
 constexpr uint32_t cdiv(uint32_t a, uint32_t b)
 {
