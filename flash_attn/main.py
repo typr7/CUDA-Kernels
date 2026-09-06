@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import torch.nn.functional as F
 import torch.utils.cpp_extension
+from flash_attn import flash_attn_func
 from triton.testing import do_bench
 
 
@@ -39,12 +40,17 @@ for seq_len in (512, 1024, 2048, 4096, 8192):
         .transpose(1, 2)
         .contiguous()
     )
-    output_split_q = module.flash_attn_split_q(Q, K, V)
+    output_fa2_tma = module.fa2_tma_lazy_rescale(Q, K, V)
+    output_flash_attn = flash_attn_func(Q, K, V, causal=True)
 
-    torch.testing.assert_close(output_split_q, output_ref, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(output_fa2_tma, output_ref, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(output_flash_attn, output_ref, rtol=1e-2, atol=1e-2)
 
     print(f"shape: {shape}")
     print(
         f"F.sdpa: {benchmark(F.scaled_dot_product_attention, Q_trans, K_trans, V_trans, is_causal=True)}"
     )
-    print(f"fa2_mha_tma: {benchmark(module.flash_attn_split_q, Q, K, V)}")
+    print(f"flash-attn: {benchmark(flash_attn_func, Q, K, V, causal=True)}")
+    print(
+        f"fa2_tma_lazy_rescale: {benchmark(module.fa2_tma_lazy_rescale, Q, K, V)}"
+    )
