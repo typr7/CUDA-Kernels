@@ -16,7 +16,7 @@ def benchmark(f: Callable[..., Any], *args: Any, **kwargs: Any) -> float:
 
 module: Any = torch.utils.cpp_extension.load(
     "module",
-    sources=["flash_attn.cpp", "flash_attn_split_q.cu"],
+    sources=["flash_attn.cpp", "fa2_tma_lazy_rescale.cu"],
     extra_cflags=["-std=c++20"],
     extra_cuda_cflags=["-O3", "-std=c++20", "-lineinfo", "-Xptxas=-v"],
     extra_ldflags=["-lcuda"],

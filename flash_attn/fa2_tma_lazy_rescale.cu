@@ -89,7 +89,7 @@ template <
     uint32_t kHeadDim
 > requires (std::is_same_v<T, __nv_bfloat16>)
 __global__ __launch_bounds__(kNumQWarps * kNumKWarps * kNumThreadsPerWarp)
-void flash_attn_split_q(
+void fa2_tma_lazy_rescale(
     const __grid_constant__ CUtensorMap Q,
     const __grid_constant__ CUtensorMap K,
     const __grid_constant__ CUtensorMap V,
@@ -389,7 +389,7 @@ void flash_attn_split_q(
 // MHA, Q/K/V shape: [batch_size, seq_len, head_num, head_dim]
 template <uint32_t kHeadDim>
 requires (kHeadDim == 128)
-void launch_flash_attn_split_q(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O)
+void launch_fa2_tma_lazy_rescale(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O)
 {
     constexpr uint32_t kNumQWarps = 4;
     constexpr uint32_t kNumKWarps = 1;
@@ -452,11 +452,10 @@ void launch_flash_attn_split_q(torch::Tensor Q, torch::Tensor K, torch::Tensor V
     const dim3 grid_dim(cdiv(q_seq_len, kBr), q_head_num, batch_size);
     const dim3 block_dim(kNumThreads);
 
-    constexpr uint32_t kSmemBytes = sizeof(SharedStorage<__nv_bfloat16, kBr, kBc, 128>); // QKV Tile + 3 barriers
-                                  // + 3 * sizeof(__mbarrier_t); // barrier
+    constexpr uint32_t kSmemBytes = sizeof(SharedStorage<__nv_bfloat16, kBr, kBc, 128>);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-    const auto kernel = flash_attn_split_q<
+    const auto kernel = fa2_tma_lazy_rescale<
         __nv_bfloat16,
         kNumQWarps,
         kNumKWarps,
@@ -479,6 +478,6 @@ void launch_flash_attn_split_q(torch::Tensor Q, torch::Tensor K, torch::Tensor V
     );
 }
 
-template void launch_flash_attn_split_q<128>(
+template void launch_fa2_tma_lazy_rescale<128>(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O
 );

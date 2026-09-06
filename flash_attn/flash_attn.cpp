@@ -11,7 +11,7 @@ using FlashAttnFn = void(
 
 template <uint32_t kHeadDim>
 requires (kHeadDim == 128)
-void launch_flash_attn_split_q(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O);
+void launch_fa2_tma_lazy_rescale(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O);
 
 template <FlashAttnFn flash_attn_fn>
 torch::Tensor flash_attn(torch::Tensor Q, torch::Tensor K, torch::Tensor V)
@@ -26,5 +26,5 @@ torch::Tensor flash_attn(torch::Tensor Q, torch::Tensor K, torch::Tensor V)
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("flash_attn_split_q", &flash_attn<launch_flash_attn_split_q<128>>, "Flash attention split Q");
+    m.def("fa2_tma_lazy_rescale", &flash_attn<launch_fa2_tma_lazy_rescale<128>>, "FlashAttention2 + TMA + Lazy Rescale");
 }
