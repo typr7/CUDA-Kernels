@@ -478,3 +478,7 @@ void launch_flash_attn_split_q(torch::Tensor Q, torch::Tensor K, torch::Tensor V
         kv_head_num
     );
 }
+
+template void launch_flash_attn_split_q<128>(
+    torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O
+);
