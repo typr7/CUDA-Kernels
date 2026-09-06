@@ -17,9 +17,9 @@ constexpr uint32_t kMmaK = 16;
 template <typename T, uint32_t kBr, uint32_t kBc, uint32_t kHeadDim>
 struct SharedStorage
 {
-    alignas(128) union
+    union
     {
-        alignas(128) struct
+        struct
         {
             alignas(128) T smem_q[2][kBr][kHeadDim / 2];
             alignas(128) T smem_k[2][kBc][kHeadDim / 2];
