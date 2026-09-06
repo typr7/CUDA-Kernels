@@ -24,10 +24,10 @@ struct SharedStorage
             alignas(128) T smem_q[2][kBr][kHeadDim / 2];
             alignas(128) T smem_k[2][kBc][kHeadDim / 2];
             alignas(128) T smem_v[2][kBc][kHeadDim / 2];
-        } mainloop;
+        };
 
         alignas(128) T smem_o[kBr][kHeadDim];
-    } tile;
+    };
 
     alignas(16) uint64_t barrier_q;
     alignas(16) uint64_t barrier_k;
@@ -110,7 +110,8 @@ void fa2_tma_lazy_rescale(
     constexpr uint32_t kHeadDimDivMmaN = kHeadDim / kMmaN;
     constexpr uint32_t kBcDivMmaN = kBc / kMmaN;
     constexpr uint32_t kBcDivMmaK = kBc / kMmaK;
-    constexpr float lazy_scale_threshold = 0x1p-8f;
+    // constexpr float lazy_scale_threshold = 0x1p-8f;
+    constexpr float kMaxExponentGap = 8.f;
     const float kScale = rsqrt(static_cast<float>(kHeadDim));
     const float kScaleLog2e = kScale * 1.44269504f;
 
@@ -118,7 +119,6 @@ void fa2_tma_lazy_rescale(
 
     extern __shared__ Shared smem[];
     Shared& shared = smem[0];
-    auto& mainloop = shared.tile.mainloop;
 
     const uint32_t tid = threadIdx.x;
     const uint32_t warp_id = tid / kNumThreadsPerWarp;
@@ -143,7 +143,7 @@ void fa2_tma_lazy_rescale(
         mbarrier_expect_tx(shared.barrier_q, kBr * kHeadDim * sizeof(T));
 
         cp_async_bulk_tensor_4d(
-            mainloop.smem_q[0],
+            shared.smem_q[0],
             Q,
             shared.barrier_q,
             0,
@@ -152,7 +152,7 @@ void fa2_tma_lazy_rescale(
             batch_idx
         );
         cp_async_bulk_tensor_4d(
-            mainloop.smem_q[1],
+            shared.smem_q[1],
             Q,
             shared.barrier_q,
             kHeadDim / 2,
@@ -166,11 +166,10 @@ void fa2_tma_lazy_rescale(
 
     // load Q tile from smem to reg
     uint32_t q_reg[kHeadDim / kMmaK][kNumQRegsPerThread];
-    load_mma_tile_q_s2r(q_reg, mainloop.smem_q);
+    load_mma_tile_q_s2r(q_reg, shared.smem_q);
 
-    float m[2] = {-CUDART_INF_F, -CUDART_INF_F};
+    float m_ref[2] = {-CUDART_INF_F, -CUDART_INF_F};
     float l[2] = {0.f, 0.f};
-    float row_scale[2] = {1.f, 1.f};
 
     uint32_t phase_k = 0;
     uint32_t phase_v = 0;
@@ -182,7 +181,7 @@ void fa2_tma_lazy_rescale(
             mbarrier_expect_tx(shared.barrier_k, kBc * kHeadDim * sizeof(T));
             mbarrier_expect_tx(shared.barrier_v, kBc * kHeadDim * sizeof(T));
             cp_async_bulk_tensor_4d(
-                mainloop.smem_k[0],
+                shared.smem_k[0],
                 K,
                 shared.barrier_k,
                 0,
@@ -191,7 +190,7 @@ void fa2_tma_lazy_rescale(
                 batch_idx
             );
             cp_async_bulk_tensor_4d(
-                mainloop.smem_k[1],
+                shared.smem_k[1],
                 K,
                 shared.barrier_k,
                 kHeadDim / 2,
@@ -200,7 +199,7 @@ void fa2_tma_lazy_rescale(
                 batch_idx
             );
             cp_async_bulk_tensor_4d(
-                mainloop.smem_v[0],
+                shared.smem_v[0],
                 V,
                 shared.barrier_v,
                 0,
@@ -209,7 +208,7 @@ void fa2_tma_lazy_rescale(
                 batch_idx
             );
             cp_async_bulk_tensor_4d(
-                mainloop.smem_v[1],
+                shared.smem_v[1],
                 V,
                 shared.barrier_v,
                 kHeadDim / 2,
@@ -233,7 +232,7 @@ void fa2_tma_lazy_rescale(
                 for (uint32_t n = 0; n < kBcDivMmaN; n += 2) {
                     uint32_t k_reg[4];
                     const uint32_t y = n * kMmaN + (lane_id / 16) * 8 + lane_id % 8;
-                    ldmatrix_x4(k_reg, &mainloop.smem_k[chunk][y][swizzle_tma_128b(y, x)]);
+                    ldmatrix_x4(k_reg, &shared.smem_k[chunk][y][swizzle_tma_128b(y, x)]);
                     mma_m16n8k16(q_reg[chunk * (kHeadDimDivMmaK / 2) + k], k_reg, acc_s[n]);
                     mma_m16n8k16(q_reg[chunk * (kHeadDimDivMmaK / 2) + k], k_reg + 2, acc_s[n + 1]);
                 }
@@ -245,9 +244,9 @@ void fa2_tma_lazy_rescale(
         const uint32_t col_base = kv_start_idx + (lane_id % 4) * 2;
 
         // online softmax
-        float m_prev[2] = {m[0], m[1]};
-        float m_curr[2] = {-CUDART_INF_F, -CUDART_INF_F}; // row0, row1
-        float l_i[2] = {0.f, 0.f};
+        float tile_max[2] = {-CUDART_INF_F, -CUDART_INF_F};
+        // float m_curr[2] = {-CUDART_INF_F, -CUDART_INF_F}; // row0, row1
+        // float l_i[2] = {0.f, 0.f};
 
         const bool need_causal_mask = warp_start_idx < kv_start_idx + kBc;
 
@@ -261,21 +260,26 @@ void fa2_tma_lazy_rescale(
                 s[2] = row1 >= col ? s[2] : -CUDART_INF_F;
                 s[3] = row1 >= col + 1 ? s[3] : -CUDART_INF_F;
             }
-            m_curr[0] = fmaxf(m_curr[0], fmaxf(s[0], s[1]));
-            m_curr[1] = fmaxf(m_curr[1], fmaxf(s[2], s[3]));
+            // m_curr[0] = fmaxf(m_curr[0], fmaxf(s[0], s[1]));
+            // m_curr[1] = fmaxf(m_curr[1], fmaxf(s[2], s[3]));
+            tile_max[0] = fmaxf(tile_max[0], fmaxf(s[0], s[1]));
+            tile_max[1] = fmaxf(tile_max[1], fmaxf(s[2], s[3]));
         }
 
-        m_curr[0] = fmaxf(m_curr[0], __shfl_xor_sync(0xffffffff, m_curr[0], 1));
-        m_curr[0] = fmaxf(m_curr[0], __shfl_xor_sync(0xffffffff, m_curr[0], 2));
-        m_curr[1] = fmaxf(m_curr[1], __shfl_xor_sync(0xffffffff, m_curr[1], 1));
-        m_curr[1] = fmaxf(m_curr[1], __shfl_xor_sync(0xffffffff, m_curr[1], 2));
+        tile_max[0] = fmaxf(tile_max[0], __shfl_xor_sync(0xffffffff, tile_max[0], 1));
+        tile_max[0] = fmaxf(tile_max[0], __shfl_xor_sync(0xffffffff, tile_max[0], 2));
+        tile_max[1] = fmaxf(tile_max[1], __shfl_xor_sync(0xffffffff, tile_max[1], 1));
+        tile_max[1] = fmaxf(tile_max[1], __shfl_xor_sync(0xffffffff, tile_max[1], 2));
 
-        m_curr[0] = m_curr[0] == -CUDART_INF_F ? -CUDART_INF_F : m_curr[0] * kScaleLog2e;
-        m_curr[1] = m_curr[1] == -CUDART_INF_F ? -CUDART_INF_F : m_curr[1] * kScaleLog2e;
+        tile_max[0] *= kScaleLog2e;
+        tile_max[1] *= kScaleLog2e;
+        // tile_max[0] = tile_max[0] == -CUDART_INF_F ? -CUDART_INF_F : tile_max[0] * kScaleLog2e;
+        // m_curr[1] = m_curr[1] == -CUDART_INF_F ? -CUDART_INF_F : m_curr[1] * kScaleLog2e;
 
-        m[0] = fmaxf(m[0], m_curr[0]);
-        m[1] = fmaxf(m[1], m_curr[1]);
+        // m[0] = fmaxf(m[0], m_curr[0]);
+        // m[1] = fmaxf(m[1], m_curr[1]);
 
+        /*
         float alpha[2] = {
             m_prev[0] == -CUDART_INF_F ? 1.f : exp2f(m_prev[0] - m[0]),
             m_prev[1] == -CUDART_INF_F ? 1.f : exp2f(m_prev[1] - m[1])
@@ -292,19 +296,42 @@ void fa2_tma_lazy_rescale(
         }
 
         float inv_row_scale[2] = {__frcp_rn(row_scale[0]), __frcp_rn(row_scale[1])};
+        */
+
+        for (uint32_t row = 0; row < 2; row++) {
+            const float new_max = tile_max[row];
+
+            if (kv_start_idx == 0) {
+                m_ref[row] = new_max;
+            } else if (new_max > m_ref[row] + kMaxExponentGap) {
+                const float scale = exp2f(m_ref[row] - new_max);
+
+#pragma unroll
+                for (uint32_t n = 0; n < kHeadDimDivMmaN; n++) {
+                    acc_o[n][row * 2] *= scale;
+                    acc_o[n][row * 2 + 1] *= scale;
+                }
+
+                l[row] *= scale;
+                m_ref[row] = new_max;
+            }
+        }
 
 #pragma unroll
         for (uint32_t i = 0; i < kBcDivMmaN; i++) {
             float* s = acc_s[i];
-            s[0] = exp2f(fmaf(s[0], kScaleLog2e, -m[0])) * inv_row_scale[0];
-            s[1] = exp2f(fmaf(s[1], kScaleLog2e, -m[0])) * inv_row_scale[0];
-            s[2] = exp2f(fmaf(s[2], kScaleLog2e, -m[1])) * inv_row_scale[1];
-            s[3] = exp2f(fmaf(s[3], kScaleLog2e, -m[1])) * inv_row_scale[1];
+            s[0] = exp2f(fmaf(s[0], kScaleLog2e, -m_ref[0]));
+            s[1] = exp2f(fmaf(s[1], kScaleLog2e, -m_ref[0]));
+            s[2] = exp2f(fmaf(s[2], kScaleLog2e, -m_ref[1]));
+            s[3] = exp2f(fmaf(s[3], kScaleLog2e, -m_ref[1]));
 
-            l_i[0] += s[0] + s[1];
-            l_i[1] += s[2] + s[3];
+            // l_i[0] += s[0] + s[1];
+            // l_i[1] += s[2] + s[3];
+            l[0] += s[0] + s[1];
+            l[1] += s[2] + s[3];
         }
 
+        /*
         l_i[0] += __shfl_xor_sync(0xffffffff, l_i[0], 1);
         l_i[0] += __shfl_xor_sync(0xffffffff, l_i[0], 2);
         l_i[1] += __shfl_xor_sync(0xffffffff, l_i[1], 1);
@@ -312,6 +339,7 @@ void fa2_tma_lazy_rescale(
 
         l[0] += l_i[0];
         l[1] += l_i[1];
+        */
 
         mbarrier_wait(shared.barrier_v, phase_v);
         phase_v ^= 1;
@@ -334,7 +362,7 @@ void fa2_tma_lazy_rescale(
                 for (uint32_t n = 0; n < kHeadDimDivMmaN / 2; n += 2) {
                     uint32_t v_reg[4];
                     const uint32_t x = n * kMmaN + x_offset;
-                    ldmatrix_x4_trans(v_reg, &mainloop.smem_v[chunk][y][swizzle_tma_128b(y, x)]);
+                    ldmatrix_x4_trans(v_reg, &shared.smem_v[chunk][y][swizzle_tma_128b(y, x)]);
                     mma_m16n8k16(p_reg, v_reg, acc_o[chunk * (kHeadDimDivMmaN / 2) + n]);
                     mma_m16n8k16(p_reg, v_reg + 2, acc_o[chunk * (kHeadDimDivMmaN / 2) + n + 1]);
                 }
@@ -344,12 +372,16 @@ void fa2_tma_lazy_rescale(
         __syncthreads();
     }
 
+    l[0] += __shfl_xor_sync(0xffffffff, l[0], 1);
+    l[0] += __shfl_xor_sync(0xffffffff, l[0], 2);
+    l[1] += __shfl_xor_sync(0xffffffff, l[1], 1);
+    l[1] += __shfl_xor_sync(0xffffffff, l[1], 2);
+
     // write back
     const float inv_l[2] = {__frcp_rn(l[0]), __frcp_rn(l[1])};
     const uint32_t row0 = warp_id * kMmaM + lane_id / 4;
     const uint32_t row1 = row0 + 8;
     const uint32_t col_base = (lane_id % 4) * 2;
-    auto& smem_o = shared.tile.smem_o;
 
 #pragma unroll
     for (uint32_t i = 0; i < kHeadDimDivMmaN; i++) {
@@ -359,9 +391,9 @@ void fa2_tma_lazy_rescale(
         o[1] *= inv_l[0];
         o[2] *= inv_l[1];
         o[3] *= inv_l[1];
-        as<__nv_bfloat162>(&smem_o[row0][swizzle_tma_128b(row0, col)]) =
+        as<__nv_bfloat162>(&shared.smem_o[row0][swizzle_tma_128b(row0, col)]) =
             __float22bfloat162_rn(make_float2(o[0], o[1]));
-        as<__nv_bfloat162>(&smem_o[row1][swizzle_tma_128b(row1, col)]) =
+        as<__nv_bfloat162>(&shared.smem_o[row1][swizzle_tma_128b(row1, col)]) =
             __float22bfloat162_rn(make_float2(o[2], o[3]));
     }
     __syncthreads();
@@ -379,7 +411,7 @@ void fa2_tma_lazy_rescale(
         const uint32_t g_x = g_x_base + s_x;
         if (q_start_idx + s_y < q_seq_len) {
             as<uint4>(O + static_cast<uint64_t>(g_y) * stride + g_x) =
-                as<uint4>(&smem_o[s_y][swizzle_tma_128b(s_y, s_x)]);
+                as<uint4>(&shared.smem_o[s_y][swizzle_tma_128b(s_y, s_x)]);
         }
     }
 }
