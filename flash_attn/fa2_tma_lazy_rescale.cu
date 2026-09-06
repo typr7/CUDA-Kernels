@@ -21,8 +21,11 @@ struct SharedStorage
     {
         struct
         {
-            alignas(128) T smem_q[2][kBr][kHeadDim / 2];
-            alignas(128) T smem_k[2][kBc][kHeadDim / 2];
+            union
+            {
+                alignas(128) T smem_q[2][kBr][kHeadDim / 2];
+                alignas(128) T smem_k[2][kBc][kHeadDim / 2];
+            };
             alignas(128) T smem_v[2][kBc][kHeadDim / 2];
         };
 
@@ -176,6 +179,8 @@ void fa2_tma_lazy_rescale(
 
     float acc_o[kHeadDimDivMmaN][kNumAccRegsPerThread] = {0.f};
     const uint32_t kv_len = min(kv_seq_len, q_start_idx + kBr);
+
+    __syncthreads();
     for (uint32_t kv_start_idx = 0; kv_start_idx < kv_len; kv_start_idx += kBc) {
         if (tid == 0) {
             mbarrier_expect_tx(shared.barrier_k, kBc * kHeadDim * sizeof(T));
