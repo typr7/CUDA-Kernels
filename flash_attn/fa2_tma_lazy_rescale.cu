@@ -250,8 +250,6 @@ void fa2_tma_lazy_rescale(
 
         // online softmax
         float tile_max[2] = {-CUDART_INF_F, -CUDART_INF_F};
-        // float m_curr[2] = {-CUDART_INF_F, -CUDART_INF_F}; // row0, row1
-        // float l_i[2] = {0.f, 0.f};
 
         const bool need_causal_mask = warp_start_idx < kv_start_idx + kBc;
 
@@ -265,8 +263,6 @@ void fa2_tma_lazy_rescale(
                 s[2] = row1 >= col ? s[2] : -CUDART_INF_F;
                 s[3] = row1 >= col + 1 ? s[3] : -CUDART_INF_F;
             }
-            // m_curr[0] = fmaxf(m_curr[0], fmaxf(s[0], s[1]));
-            // m_curr[1] = fmaxf(m_curr[1], fmaxf(s[2], s[3]));
             tile_max[0] = fmaxf(tile_max[0], fmaxf(s[0], s[1]));
             tile_max[1] = fmaxf(tile_max[1], fmaxf(s[2], s[3]));
         }
@@ -278,30 +274,6 @@ void fa2_tma_lazy_rescale(
 
         tile_max[0] *= kScaleLog2e;
         tile_max[1] *= kScaleLog2e;
-        // tile_max[0] = tile_max[0] == -CUDART_INF_F ? -CUDART_INF_F : tile_max[0] * kScaleLog2e;
-        // m_curr[1] = m_curr[1] == -CUDART_INF_F ? -CUDART_INF_F : m_curr[1] * kScaleLog2e;
-
-        // m[0] = fmaxf(m[0], m_curr[0]);
-        // m[1] = fmaxf(m[1], m_curr[1]);
-
-        /*
-        float alpha[2] = {
-            m_prev[0] == -CUDART_INF_F ? 1.f : exp2f(m_prev[0] - m[0]),
-            m_prev[1] == -CUDART_INF_F ? 1.f : exp2f(m_prev[1] - m[1])
-        };
-
-        row_scale[0] *= alpha[0];
-        row_scale[1] *= alpha[1];
-
-        if (row_scale[0] < lazy_scale_threshold) {
-            rescale(acc_o, l, row_scale, 0);
-        }
-        if (row_scale[1] < lazy_scale_threshold) {
-            rescale(acc_o, l, row_scale, 1);
-        }
-
-        float inv_row_scale[2] = {__frcp_rn(row_scale[0]), __frcp_rn(row_scale[1])};
-        */
 
         for (uint32_t row = 0; row < 2; row++) {
             const float new_max = tile_max[row];
@@ -330,21 +302,9 @@ void fa2_tma_lazy_rescale(
             s[2] = exp2f(fmaf(s[2], kScaleLog2e, -m_ref[1]));
             s[3] = exp2f(fmaf(s[3], kScaleLog2e, -m_ref[1]));
 
-            // l_i[0] += s[0] + s[1];
-            // l_i[1] += s[2] + s[3];
             l[0] += s[0] + s[1];
             l[1] += s[2] + s[3];
         }
-
-        /*
-        l_i[0] += __shfl_xor_sync(0xffffffff, l_i[0], 1);
-        l_i[0] += __shfl_xor_sync(0xffffffff, l_i[0], 2);
-        l_i[1] += __shfl_xor_sync(0xffffffff, l_i[1], 1);
-        l_i[1] += __shfl_xor_sync(0xffffffff, l_i[1], 2);
-
-        l[0] += l_i[0];
-        l[1] += l_i[1];
-        */
 
         mbarrier_wait(shared.barrier_v, phase_v);
         phase_v ^= 1;
