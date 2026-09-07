@@ -54,6 +54,32 @@ void fence_proxy_async()
     asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
 }
 
+// cp.async
+
+__device__ __forceinline__
+void cp_async_cg_16(const void* gmem, void* smem)
+{
+    const uint32_t smem_addr = cvta_shared(smem);
+    asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16;\n"
+        :: "r"(smem_addr), "l"(gmem)
+        : "memory"
+    );
+}
+
+__device__ __forceinline__
+void cp_async_commit()
+{
+    asm volatile("cp.async.commit_group;\n" ::: "memory");
+}
+
+template <uint32_t kPendingGroups>
+__device__ __forceinline__
+void cp_async_wait_group()
+{
+    asm volatile("cp.async.wait_group %0;\n" :: "n"(kPendingGroups) : "memory");
+}
+
 // mbarrier
 
 __device__ __forceinline__
