@@ -64,25 +64,6 @@ void load_mma_tile_q_s2r(
     }
 }
 
-template <uint32_t kNumTiles>
-__device__ __forceinline__
-void rescale(
-    float (&acc_o)[kNumTiles][4],
-    float l[2],
-    float row_scale[2],
-    uint32_t row_idx
-)
-{
-    const float scale = row_scale[row_idx];
-#pragma unroll
-    for (uint32_t i = 0; i < kNumTiles; i++) {
-        acc_o[i][row_idx * 2] *= scale;
-        acc_o[i][row_idx * 2 + 1] *= scale;
-    }
-    l[row_idx] *= scale;
-    row_scale[row_idx] = 1.f;
-}
-
 template <
     typename T,
     uint32_t kNumQWarps,
@@ -97,9 +78,8 @@ void fa2_tma_lazy_rescale(
     const __grid_constant__ CUtensorMap K,
     const __grid_constant__ CUtensorMap V,
     T* __restrict__ O, // [batch_size, q_seq_len, q_head_num, head_dim]
-    uint32_t q_seq_len,
+    uint32_t seq_len,
     uint32_t q_head_num,
-    uint32_t kv_seq_len,
     uint32_t kv_head_num
 )
 {
@@ -178,7 +158,7 @@ void fa2_tma_lazy_rescale(
     uint32_t phase_v = 0;
 
     float acc_o[kHeadDimDivMmaN][kNumAccRegsPerThread] = {0.f};
-    const uint32_t kv_len = min(kv_seq_len, q_start_idx + kBr);
+    const uint32_t kv_len = min(seq_len, q_start_idx + kBr);
 
     __syncthreads();
     for (uint32_t kv_start_idx = 0; kv_start_idx < kv_len; kv_start_idx += kBc) {
@@ -364,7 +344,7 @@ void fa2_tma_lazy_rescale(
     __syncthreads();
 
     constexpr uint32_t kHeadDimU4 = kHeadDim / kNumBf16sPerVector;
-    const uint32_t g_y_base = batch_idx * q_seq_len + q_start_idx;
+    const uint32_t g_y_base = batch_idx * seq_len + q_start_idx;
     const uint32_t g_x_base = q_head_idx * kHeadDim;
     const uint32_t stride = q_head_num * kHeadDim;
 
@@ -374,7 +354,7 @@ void fa2_tma_lazy_rescale(
         const uint32_t s_x = (i % kHeadDimU4) * kNumBf16sPerVector;
         const uint32_t g_y = g_y_base + s_y;
         const uint32_t g_x = g_x_base + s_x;
-        if (q_start_idx + s_y < q_seq_len) {
+        if (q_start_idx + s_y < seq_len) {
             as<uint4>(O + static_cast<uint64_t>(g_y) * stride + g_x) =
                 as<uint4>(&shared.smem_o[s_y][swizzle_tma_128b(s_y, s_x)]);
         }
@@ -399,13 +379,14 @@ void launch_fa2_tma_lazy_rescale(torch::Tensor Q, torch::Tensor K, torch::Tensor
     const uint32_t batch_size = Q.size(0);
     const uint32_t head_dim = Q.size(3);
 
-    TORCH_CHECK(kHeadDim == head_dim, "Unmatched head dim.");
-
     const uint32_t q_seq_len = Q.size(1);
     const uint32_t q_head_num = Q.size(2);
 
     const uint32_t kv_seq_len = K.size(1);
     const uint32_t kv_head_num = K.size(2);
+
+    TORCH_CHECK(kHeadDim == head_dim, "Unmatched head dim.");
+    TORCH_CHECK(q_seq_len == kv_seq_len, "Only support equavalent Q/KV seq_len");
 
     CUtensorMap tmq = create_tensor_map_4d(
         reinterpret_cast<__nv_bfloat16*>(Q.data_ptr()),
@@ -470,7 +451,6 @@ void launch_fa2_tma_lazy_rescale(torch::Tensor Q, torch::Tensor K, torch::Tensor
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()),
         q_seq_len,
         q_head_num,
-        kv_seq_len,
         kv_head_num
     );
 }
