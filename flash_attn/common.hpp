@@ -57,12 +57,12 @@ void fence_proxy_async()
 // cp.async
 
 __device__ __forceinline__
-void cp_async_cg_16(const void* gmem, void* smem)
+void cp_async_cg_16(const void* gmem, void* smem, uint32_t src_size = 16)
 {
     const uint32_t smem_addr = cvta_shared(smem);
     asm volatile(
-        "cp.async.cg.shared.global [%0], [%1], 16;\n"
-        :: "r"(smem_addr), "l"(gmem)
+        "cp.async.cg.shared.global.L2::128B [%0], [%1], 16, %2;\n"
+        :: "r"(smem_addr), "l"(gmem), "r"(src_size)
         : "memory"
     );
 }

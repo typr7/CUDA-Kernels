@@ -33,13 +33,14 @@ struct SharedStorage
     };
 };
 
-// Same 128-byte swizzle as the ldmatrix consumers; full tiles only.
+// Same 128-byte swizzle as the ldmatrix consumers; zero-fill OOB rows like TMA.
 template <uint32_t kNumThreads, typename T, uint32_t kNumRows, uint32_t kNumCols>
 __device__ __forceinline__
 void load_tile_to_smem_async(
     const T* __restrict__ src,
     T (&smem)[kNumRows][kNumCols],
-    uint32_t src_stride
+    uint32_t src_stride,
+    uint32_t src_rows
 )
 {
     constexpr uint32_t kNumColsU4 = kNumCols / kNumBf16sPerVector;
@@ -48,7 +49,8 @@ void load_tile_to_smem_async(
     for (uint32_t i = threadIdx.x; i < kNumRows * kNumColsU4; i += kNumThreads) {
         const uint32_t y = i / kNumColsU4;
         const uint32_t x = (i % kNumColsU4) * kNumBf16sPerVector;
-        cp_async_cg_16(src + y * src_stride + x, &smem[y][swizzle_tma_128b(y, x)]);
+        const uint32_t src_size = y < src_rows ? 16 : 0;
+        cp_async_cg_16(src + y * src_stride + x, &smem[y][swizzle_tma_128b(y, x)], src_size);
     }
     cp_async_commit();
 }
@@ -139,7 +141,7 @@ void fa2_cp_async_lazy_rescale(
     K += kv_offset;
     V += kv_offset;
 
-    load_tile_to_smem_async<kNumThreads>(Q, shared.smem_q, q_stride);
+    load_tile_to_smem_async<kNumThreads>(Q, shared.smem_q, q_stride, seq_len - q_start_idx);
     cp_async_wait_group<0>();
     __syncthreads();
 
@@ -156,10 +158,10 @@ void fa2_cp_async_lazy_rescale(
     __syncthreads();
     for (uint32_t kv_start_idx = 0; kv_start_idx < kv_len; kv_start_idx += kBc) {
         load_tile_to_smem_async<kNumThreads>(
-            K + kv_start_idx * kv_stride, shared.smem_k, kv_stride
+            K + kv_start_idx * kv_stride, shared.smem_k, kv_stride, seq_len - kv_start_idx
         );
         load_tile_to_smem_async<kNumThreads>(
-            V + kv_start_idx * kv_stride, shared.smem_v, kv_stride
+            V + kv_start_idx * kv_stride, shared.smem_v, kv_stride, seq_len - kv_start_idx
         );
         // K is ready while V can overlap with QK^T and softmax.
         cp_async_wait_group<1>();
@@ -316,7 +318,7 @@ void fa2_cp_async_lazy_rescale(
 }
 
 // MHA/GQA, contiguous Q/K/V shape: [batch_size, seq_len, head_num, head_dim]
-// Full tiles only: seq_len must be a multiple of 64; no additional checks.
+// Tail rows in Q/K/V tiles are zero-filled via cp.async src_size.
 template <uint32_t kHeadDim>
 requires (kHeadDim == 128)
 void launch_fa2_cp_async_lazy_rescale(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O)
