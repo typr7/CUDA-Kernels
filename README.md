@@ -2,7 +2,7 @@
 
 A collection of CUDA operator implementations developed and benchmarked against production baselines. 
 
-## Operator Index
+## Operators
 
 | Operator | Workload | Baseline | Best measured result |
 | :--- | :--- | :--- | :--- |
