@@ -32,13 +32,13 @@ constexpr uint32_t cdiv(uint32_t a, uint32_t b)
 }
 
 __device__ __forceinline__
-uint32_t pack_float2(float2 f2)
+uint32_t pack_float2(float low, float high)
 {
     union {
         uint32_t packed;
         __nv_bfloat162 bf162;
     } pack;
-    pack.bf162 = __float22bfloat162_rn(f2);
+    pack.bf162 = __float22bfloat162_rn(make_float2(low, high));
     return pack.packed;
 }
 

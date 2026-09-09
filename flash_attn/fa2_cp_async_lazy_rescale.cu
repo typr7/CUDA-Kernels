@@ -252,10 +252,10 @@ void fa2_cp_async_lazy_rescale(
             const float* s0 = acc_s[k * 2]; // row00, row01, row10, row11
             const float* s1 = acc_s[k * 2 + 1];
             uint32_t p_reg[4] = {
-                pack_float2({s0[0], s0[1]}),
-                pack_float2({s0[2], s0[3]}),
-                pack_float2({s1[0], s1[1]}),
-                pack_float2({s1[2], s1[3]})
+                pack_float2(s0[0], s0[1]),
+                pack_float2(s0[2], s0[3]),
+                pack_float2(s1[0], s1[1]),
+                pack_float2(s1[2], s1[3])
             };
             const uint32_t y = k * kMmaK + lane_id % kMmaK;
             const uint32_t x_offset = (lane_id / 16) * kMmaN;
