@@ -104,6 +104,67 @@ void cp_async_wait_all()
     asm volatile("cp.async.wait_all;" ::: "memory");
 }
 
+__device__ __forceinline__
+void fence_proxy_async()
+{
+    asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+}
+
+__device__ __forceinline__
+void mbarrier_init(const uint64_t& barrier, uint32_t expected_count)
+{
+    const uint32_t addr = cvta_shared(&barrier);
+    asm volatile("mbarrier.init.shared.b64 [%0], %1;\n" :: "r"(addr), "r"(expected_count));
+}
+
+__device__ __forceinline__
+void mbarrier_expect_tx(const uint64_t& barrier, uint32_t tx_bytes)
+{
+    const uint32_t addr = cvta_shared(&barrier);
+    asm volatile("mbarrier.arrive.expect_tx.shared.b64 _, [%0], %1;\n" :: "r"(addr), "r"(tx_bytes));
+}
+
+__device__ __forceinline__
+void mbarrier_wait(const uint64_t& barrier, uint32_t phase)
+{
+    const uint32_t addr = cvta_shared(&barrier);
+    constexpr uint32_t TICKS = 100'000'000;
+    asm volatile(
+        "{\n\t"
+            ".reg .pred p;\n\t"
+            "WAIT:\n\t"
+            "mbarrier.try_wait.parity.shared::cta.b64 p, [%0], %1, %2;\n\t"
+            "@p bra DONE;\n\t"
+            "bra WAIT;\n\t"
+            "DONE:\n\t"
+        "}\n"
+        :: "r"(addr), "r"(phase), "r"(TICKS)
+        : "memory"
+    );
+}
+
+__device__ __forceinline__
+void cp_async_bulk_tensor_2d(
+    void* smem,
+    const CUtensorMap& tensor_map,
+    const uint64_t& barrier,
+    uint32_t x,
+    uint32_t y
+) {
+    const uint32_t smem_addr = cvta_shared(smem);
+    const uint32_t barrier_addr = cvta_shared(&barrier);
+    asm volatile(
+        "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes "
+        "[%0], [%1, {%2, %3}], [%4];\n"
+        :: "r"(smem_addr),
+           "l"(&tensor_map),
+           "r"(x),
+           "r"(y),
+           "r"(barrier_addr)
+        : "memory"
+    );
+}
+
 using KernelFn = void(
     const nv_bfloat16*,
     const nv_bfloat16*,
