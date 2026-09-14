@@ -17,7 +17,7 @@ uint32_t swizzle_128b(uint32_t row, uint32_t col)
 }
 
 template <uint32_t CTA_TILE_M, uint32_t CTA_TILE_N, uint32_t CTA_TILE_K>
-struct alignas(128) SharedStorage
+struct alignas(1024) SharedStorage
 {
     static constexpr uint32_t A_STAGE = CTA_TILE_M * CTA_TILE_K;
     static constexpr uint32_t B_STAGE = CTA_TILE_N * CTA_TILE_K;
