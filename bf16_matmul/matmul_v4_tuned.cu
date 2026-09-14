@@ -17,12 +17,6 @@ uint32_t swizzle_smem_col_u4(uint32_t y, uint32_t x_u4)
     return x_u4 ^ (y & (TILE_N_U4 - 1));
 }
 
-__device__ __forceinline__
-uint32_t swizzle_128b(uint32_t row, uint32_t col)
-{
-    return col ^ ((row & 0b111) << 3);
-}
-
 template <uint32_t TB_SIZE, uint32_t TILE_M, uint32_t TILE_N>
 __device__ __forceinline__
 void load_tile_to_smem(
@@ -78,20 +72,18 @@ void matmul_kernel(
     constexpr uint32_t A_REGS_PER_THREAD = MMA_M * MMA_K * sizeof(nv_bfloat16) / WARP_SIZE / sizeof(uint32_t);
     constexpr uint32_t B_REGS_PER_THREAD = MMA_K * MMA_N * sizeof(nv_bfloat16) / WARP_SIZE / sizeof(uint32_t);
 
-    // const uint32_t offset_m = cta_tile_offset_m + warp_tile_offset_m;
-    // const uint32_t offset_n = cta_tile_offset_n + warp_tile_offset_n;
+    const uint32_t offset_m = cta_tile_offset_m + warp_tile_offset_m;
+    const uint32_t offset_n = cta_tile_offset_n + warp_tile_offset_n;
 
     A += cta_tile_offset_m * K;
     B += cta_tile_offset_n * K;
+    C += offset_m * N + offset_n;
 
-    extern __shared__ nv_bfloat16 smem[];
-    // __shared__ nv_bfloat16 A_smem[CTA_TILE_M][CTA_TILE_K];
-    // __shared__ nv_bfloat16 B_smem[CTA_TILE_N][CTA_TILE_K]; // column-major
+    __shared__ nv_bfloat16 A_smem[CTA_TILE_M][CTA_TILE_K];
+    __shared__ nv_bfloat16 B_smem[CTA_TILE_N][CTA_TILE_K]; // column-major
 
-    // auto* A_smem_p = reinterpret_cast<nv_bfloat16*>(A_smem);
-    nv_bfloat16* A_smem_p = smem;
-    // auto* B_smem_p = reinterpret_cast<nv_bfloat16*>(B_smem);
-    nv_bfloat16* B_smem_p = smem + CTA_TILE_M * CTA_TILE_K;
+    auto* A_smem_p = reinterpret_cast<nv_bfloat16*>(A_smem);
+    auto* B_smem_p = reinterpret_cast<nv_bfloat16*>(B_smem);
 
     float acc_reg[MMA_TILES_M][MMA_TILES_N][ACC_REGS_PER_THREAD] = {0.f};
     for (uint32_t cta_tile_offset_k = 0; cta_tile_offset_k < K; cta_tile_offset_k += CTA_TILE_K) {
@@ -149,7 +141,6 @@ void matmul_kernel(
         B += CTA_TILE_K;
     }
 
-    /*
     for (uint32_t mma_tile_y = 0; mma_tile_y < MMA_TILES_M; mma_tile_y++) {
         for (uint32_t mma_tile_x = 0; mma_tile_x < MMA_TILES_N; mma_tile_x++) {
             const uint32_t y = mma_tile_y * MMA_M + lane_id / 4;
@@ -162,40 +153,12 @@ void matmul_kernel(
                 __float22bfloat162_rn(make_float2(reg[2], reg[3]));
         }
     }
-    */
-    const uint32_t s_y_base = warp_tile_y * WARP_TILE_M;
-    const uint32_t s_x_base = warp_tile_x * WARP_TILE_N;
-    nv_bfloat16* smem_o = smem;
-    for (uint32_t m = 0; m < MMA_TILES_M; m++) {
-        const uint32_t s_y0 = s_y_base + m * MMA_M + lane_id / 4;
-        const uint32_t s_y1 = s_y0 + 8;
-        for (uint32_t n = 0; n < MMA_TILES_N; n++) {
-            const uint32_t s_x = s_x_base + n * MMA_N + (lane_id % 4) * 2;
-            const float* reg = acc_reg[m][n];
-            as<nv_bfloat162>(smem_o + s_y0 * CTA_TILE_N + swizzle_128b(s_y0, s_x)) =
-                __float22bfloat162_rn(make_float2(reg[0], reg[1]));
-            as<nv_bfloat162>(smem_o + s_y1 * CTA_TILE_N + swizzle_128b(s_y1, s_x)) =
-                __float22bfloat162_rn(make_float2(reg[2], reg[3]));
-        }
-    }
-
-    constexpr uint32_t CTA_TILE_N_U8 = CTA_TILE_N / BF16_NUM_PER_U4;
-    __syncthreads();
-
-    for (uint32_t i = tid; i < CTA_TILE_M * CTA_TILE_N_U8; i += TB_SIZE) {
-        const uint32_t s_y = i / CTA_TILE_N_U8;
-        const uint32_t s_x = (i % CTA_TILE_N_U8) * BF16_NUM_PER_U4;
-        const uint32_t g_y = cta_tile_offset_m + s_y;
-        const uint32_t g_x = cta_tile_offset_n + s_x;
-        as<uint4>(C + g_y * N + g_x) =
-            as<uint4>(smem_o + s_y * CTA_TILE_N + swizzle_128b(s_y, s_x));
-    }
 }
 
 }
 
 // expect A in row-major, B in column-major, C in row-major
-void matmul_v7(
+void matmul_v4_tuned(
     const nv_bfloat16* A,
     const nv_bfloat16* B,
     nv_bfloat16* C,
@@ -205,24 +168,18 @@ void matmul_v7(
     constexpr uint32_t CTA_TILE_N = 128;
     constexpr uint32_t CTA_TILE_K = 64;
 
-    constexpr uint32_t WARP_TILE_M = 32;
-    constexpr uint32_t WARP_TILE_N = 64;
+    constexpr uint32_t WARP_TILE_M = 64;
+    constexpr uint32_t WARP_TILE_N = 32;
 
     constexpr uint32_t TB_SIZE = (CTA_TILE_M / WARP_TILE_M) * (CTA_TILE_N / WARP_TILE_N) * WARP_SIZE;
 
     static_assert((CTA_TILE_M % WARP_TILE_M == 0) && (CTA_TILE_N % WARP_TILE_N == 0));
     assert((N % CTA_TILE_N == 0) && (M % CTA_TILE_M == 0) && (K % CTA_TILE_K == 0));
-
-    constexpr uint32_t SMEM_BYTE_SIZE = (CTA_TILE_M + CTA_TILE_N) * CTA_TILE_K * sizeof(nv_bfloat16);
-    constexpr auto kernel = matmul_kernel<TB_SIZE, CTA_TILE_M, CTA_TILE_N, CTA_TILE_K, WARP_TILE_M, WARP_TILE_N>;
     
     const dim3 grid_size(N / CTA_TILE_N, M / CTA_TILE_M);
-    /*
     matmul_kernel<
         TB_SIZE,
         CTA_TILE_M, CTA_TILE_N, CTA_TILE_K,
         WARP_TILE_M, WARP_TILE_N
     ><<<grid_size, TB_SIZE>>>(A, B, C, M, N, K);
-    */
-    launch_kernel<kernel>(grid_size, TB_SIZE, SMEM_BYTE_SIZE, A, B, C, M, N, K);
 }

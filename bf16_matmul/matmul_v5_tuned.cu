@@ -16,12 +16,6 @@ uint32_t swizzle_u4(uint32_t y, uint32_t x_u4)
     return x_u4 ^ (y & (TILE_N_U4 - 1));
 }
 
-__device__ __forceinline__
-uint32_t swizzle_128b(uint32_t row, uint32_t col)
-{
-    return col ^ ((row & 0b111) << 3);
-}
-
 template <uint32_t TB_SIZE, uint32_t TILE_M, uint32_t TILE_N>
 __device__ __forceinline__
 void load_tile_to_smem_async(
@@ -73,8 +67,8 @@ void matmul_kernel(
     const uint32_t warp_tile_offset_m = warp_tile_y * WARP_TILE_M;
     const uint32_t warp_tile_offset_n = warp_tile_x * WARP_TILE_N;
 
-    // const uint32_t offset_m = cta_tile_offset_m + warp_tile_offset_m;
-    // const uint32_t offset_n = cta_tile_offset_n + warp_tile_offset_n;
+    const uint32_t offset_m = cta_tile_offset_m + warp_tile_offset_m;
+    const uint32_t offset_n = cta_tile_offset_n + warp_tile_offset_n;
 
     constexpr uint32_t MMA_TILES_M = WARP_TILE_M / MMA_M;
     constexpr uint32_t MMA_TILES_N = WARP_TILE_N / MMA_N;
@@ -87,7 +81,7 @@ void matmul_kernel(
 
     A += cta_tile_offset_m * K;
     B += cta_tile_offset_n * K;
-    // C += offset_m * N + offset_n;
+    C += offset_m * N + offset_n;
 
     extern __shared__ nv_bfloat16 smem[];
 
@@ -188,7 +182,6 @@ void matmul_kernel(
         }
     }
 
-    /*
     for (uint32_t m = 0; m < MMA_TILES_M; m++) {
         for (uint32_t n = 0; n < MMA_TILES_N; n++) {
             const uint32_t y = m * MMA_M + lane_id / 4;
@@ -201,51 +194,23 @@ void matmul_kernel(
                 __float22bfloat162_rn(make_float2(reg[2], reg[3]));
         }
     }
-    */
-    const uint32_t s_y_base = warp_tile_y * WARP_TILE_M;
-    const uint32_t s_x_base = warp_tile_x * WARP_TILE_N;
-    nv_bfloat16* smem_o = smem;
-    for (uint32_t m = 0; m < MMA_TILES_M; m++) {
-        const uint32_t s_y0 = s_y_base + m * MMA_M + lane_id / 4;
-        const uint32_t s_y1 = s_y0 + 8;
-        for (uint32_t n = 0; n < MMA_TILES_N; n++) {
-            const uint32_t s_x = s_x_base + n * MMA_N + (lane_id % 4) * 2;
-            const float* reg = acc_reg[m][n];
-            as<nv_bfloat162>(smem_o + s_y0 * CTA_TILE_N + swizzle_128b(s_y0, s_x)) =
-                __float22bfloat162_rn(make_float2(reg[0], reg[1]));
-            as<nv_bfloat162>(smem_o + s_y1 * CTA_TILE_N + swizzle_128b(s_y1, s_x)) =
-                __float22bfloat162_rn(make_float2(reg[2], reg[3]));
-        }
-    }
-
-    constexpr uint32_t CTA_TILE_N_U8 = CTA_TILE_N / BF16_NUM_PER_U4;
-    __syncthreads();
-
-    for (uint32_t i = tid; i < CTA_TILE_M * CTA_TILE_N_U8; i += TB_SIZE) {
-        const uint32_t s_y = i / CTA_TILE_N_U8;
-        const uint32_t s_x = (i % CTA_TILE_N_U8) * BF16_NUM_PER_U4;
-        const uint32_t g_y = cta_tile_offset_m + s_y;
-        const uint32_t g_x = cta_tile_offset_n + s_x;
-        as<uint4>(C + g_y * N + g_x) =
-            as<uint4>(smem_o + s_y * CTA_TILE_N + swizzle_128b(s_y, s_x));
-    }
 }
 
 }
 
 // no bound check
-void matmul_v6(
+void matmul_v5_tuned(
     const nv_bfloat16* A,
     const nv_bfloat16* B,
     nv_bfloat16* C,
     int M, int N, int K
 ) {
-    constexpr uint32_t CTA_TILE_M = 128;
+    constexpr uint32_t CTA_TILE_M = 64;
     constexpr uint32_t CTA_TILE_N = 128;
     constexpr uint32_t CTA_TILE_K = 64;
 
-    constexpr uint32_t WARP_TILE_M = 64;
-    constexpr uint32_t WARP_TILE_N = 32;
+    constexpr uint32_t WARP_TILE_M = 32;
+    constexpr uint32_t WARP_TILE_N = 64;
 
     constexpr uint32_t WARP_TILES_M = CTA_TILE_M / WARP_TILE_M;
     constexpr uint32_t WARP_TILES_N = CTA_TILE_N / WARP_TILE_N;

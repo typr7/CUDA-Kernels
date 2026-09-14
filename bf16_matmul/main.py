@@ -13,12 +13,14 @@ def benchmark(f, *args, **kwargs):
 
 module = torch.utils.cpp_extension.load(
     'module',
-    sources=['matmul.cpp', 'matmul_v1.cu', 'matmul_v2.cu', 'matmul_v3.cu', 'matmul_v4.cu', 'matmul_v5.cu', 'matmul_v6.cu', 'matmul_v7.cu'],
+    sources=['matmul.cpp', 'matmul_v1.cu', 'matmul_v2.cu', 'matmul_v3.cu', 'matmul_v4.cu', 'matmul_v4_tuned.cu', 'matmul_v5.cu', 'matmul_v5_tuned.cu', 'matmul_v6.cu', 'matmul_v7.cu', 'matmul_v8.cu', 'matmul_v8_tuned.cu'],
     extra_cuda_cflags=[
         '-O3',
         '-lineinfo',
-        '-Xptxas=-v'
+        '-Xptxas=-v',
+        '-std=c++20'
     ],
+    extra_ldflags=["-lcuda"],
     verbose=True
 )
 
@@ -31,26 +33,35 @@ output_v1  = module.matmul_v1(input1, input2)
 output_v2  = module.matmul_v2(input1, input2)
 output_v3  = module.matmul_v3(input1, input2)
 output_v4  = module.matmul_v4(input1, input2)
+output_v4_tuned  = module.matmul_v4_tuned(input1, input2)
 output_v5  = module.matmul_v5(input1, input2)
+output_v5_tuned  = module.matmul_v5_tuned(input1, input2)
 output_v6  = module.matmul_v6(input1, input2)
 output_v7  = module.matmul_v7(input1, input2)
 output_v8  = module.matmul_v8(input1, input2)
+output_v8_tuned  = module.matmul_v8_tuned(input1, input2)
 
 torch.testing.assert_close(output_v1, output_ref)
 torch.testing.assert_close(output_v2, output_ref)
 torch.testing.assert_close(output_v3, output_ref)
 torch.testing.assert_close(output_v4, output_ref)
+torch.testing.assert_close(output_v4_tuned, output_ref)
 torch.testing.assert_close(output_v5, output_ref)
+torch.testing.assert_close(output_v5_tuned, output_ref)
 torch.testing.assert_close(output_v6, output_ref)
 torch.testing.assert_close(output_v7, output_ref)
 torch.testing.assert_close(output_v8, output_ref)
+torch.testing.assert_close(output_v8_tuned, output_ref)
 
 print(f'torch.matmul: {benchmark(torch.matmul, input1, input2_trans)}')
 print(f'v1: {benchmark(module.matmul_v1, input1, input2)}')
 print(f'v2: {benchmark(module.matmul_v2, input1, input2)}')
 print(f'v3: {benchmark(module.matmul_v3, input1, input2)}')
 print(f'v4: {benchmark(module.matmul_v4, input1, input2)}')
+print(f'v4 tuned: {benchmark(module.matmul_v4_tuned, input1, input2)}')
 print(f'v5: {benchmark(module.matmul_v5, input1, input2)}')
+print(f'v5 tuned: {benchmark(module.matmul_v5_tuned, input1, input2)}')
 print(f'v6: {benchmark(module.matmul_v6, input1, input2)}')
 print(f'v7: {benchmark(module.matmul_v7, input1, input2)}')
 print(f'v8: {benchmark(module.matmul_v8, input1, input2)}')
+print(f'v8 tuned: {benchmark(module.matmul_v8_tuned, input1, input2)}')

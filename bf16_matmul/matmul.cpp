@@ -13,10 +13,13 @@ MatmulFn matmul_v1;
 MatmulFn matmul_v2;
 MatmulFn matmul_v3;
 MatmulFn matmul_v4;
+MatmulFn matmul_v4_tuned;
 MatmulFn matmul_v5;
+MatmulFn matmul_v5_tuned;
 MatmulFn matmul_v6;
 MatmulFn matmul_v7;
 MatmulFn matmul_v8;
+MatmulFn matmul_v8_tuned;
 
 template <MatmulFn matmul_fn>
 torch::Tensor matmul(torch::Tensor A, torch::Tensor B)
@@ -43,8 +46,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul_v2", &matmul<matmul_v2>, "Matrix multiplication v2");
     m.def("matmul_v3", &matmul<matmul_v3>, "Matrix multiplication v3");
     m.def("matmul_v4", &matmul<matmul_v4>, "Matrix multiplication v4");
+    m.def("matmul_v4_tuned", &matmul<matmul_v4_tuned>, "Matrix multiplication v4 tuned");
     m.def("matmul_v5", &matmul<matmul_v5>, "Matrix multiplication v5");
+    m.def("matmul_v5_tuned", &matmul<matmul_v5_tuned>, "Matrix multiplication v5 tuned");
     m.def("matmul_v6", &matmul<matmul_v6>, "Matrix multiplication v6");
     m.def("matmul_v7", &matmul<matmul_v7>, "Matrix multiplication v7");
     m.def("matmul_v8", &matmul<matmul_v8>, "Matrix multiplication v8");
+    m.def("matmul_v8_tuned", &matmul<matmul_v8_tuned>, "Matrix multiplication v8 tuned");
 }

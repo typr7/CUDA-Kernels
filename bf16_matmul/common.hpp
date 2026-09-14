@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
+#include <cuda.h>
 
 
 inline constexpr uint32_t BF16_NUM_PER_U4 = sizeof(uint4) / sizeof(nv_bfloat16);
