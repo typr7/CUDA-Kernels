@@ -29,14 +29,14 @@ void softmax_kernel(const float* in, float* out, int N, int H)
         max_val = fmaxf(max_val, in_begin[i]);
     }
 
-    max_val = warp_reduce_max(max_val);
+    max_val = warp_reduce_max<false>(max_val);
     if (lane_id == 0) {
         max_vals[warp_id] = max_val;
     }
     __syncthreads();
 
     max_val = tid < WARPS_PER_BLOCK ? max_vals[tid] : -CUDART_INF_F;
-    max_val = warp_reduce_max(max_val);
+    max_val = warp_reduce_max<false>(max_val);
     if (tid == 0) {
         max_vals[0] = max_val;
     }
@@ -48,14 +48,14 @@ void softmax_kernel(const float* in, float* out, int N, int H)
         sum_val += expf(in_begin[i] - max_val);
     }
 
-    sum_val = warp_reduce_sum(sum_val);
+    sum_val = warp_reduce_sum<false>(sum_val);
     if (lane_id == 0) {
         sum_vals[warp_id] = sum_val;
     }
     __syncthreads();
     
     sum_val = tid < WARPS_PER_BLOCK ? sum_vals[tid] : 0.f;
-    sum_val = warp_reduce_sum(sum_val);
+    sum_val = warp_reduce_sum<false>(sum_val);
     if (tid == 0) {
         sum_vals[0] = sum_val;
     }
