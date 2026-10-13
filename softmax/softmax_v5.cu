@@ -57,10 +57,10 @@ void softmax_kernel(const float* in, float* out, int N, int H)
     float sum_val1 = 0.f;
     for (uint32_t i = tid; i < H_f4; i += TB_SIZE) {
         const float4 f4 = in_begin[i];
-        sum_val0 += expf(f4.x - max_val0)
-                 + expf(f4.y - max_val0);
-        sum_val1 += expf(f4.z - max_val0)
-                 + expf(f4.w - max_val0);
+        sum_val0 += __expf(f4.x - max_val0)
+                 + __expf(f4.y - max_val0);
+        sum_val1 += __expf(f4.z - max_val0)
+                 + __expf(f4.w - max_val0);
     }
 
     sum_val0 = warp_reduce_sum<false>(sum_val0 + sum_val1);
@@ -83,10 +83,10 @@ void softmax_kernel(const float* in, float* out, int N, int H)
     for (uint32_t i = tid; i < H_f4; i += TB_SIZE) {
         const float4 f4 = in_begin[i];
         out_begin[i] = make_float4(
-            expf(f4.x - max_val0) * norm,
-            expf(f4.y - max_val0) * norm,
-            expf(f4.z - max_val0) * norm,
-            expf(f4.w - max_val0) * norm
+            __expf(f4.x - max_val0) * norm,
+            __expf(f4.y - max_val0) * norm,
+            __expf(f4.z - max_val0) * norm,
+            __expf(f4.w - max_val0) * norm
         );
     }
 }
@@ -145,10 +145,10 @@ void softmax_kernel_h4096(const float* in, float* out, int N)
     #pragma unroll
     for (uint32_t i = 0; i < FL4S_PER_THREAD; i++) {
         float4& f4 = reg[i];
-        f4.x = expf(f4.x - max_val0);
-        f4.y = expf(f4.y - max_val0);
-        f4.z = expf(f4.z - max_val0);
-        f4.w = expf(f4.w - max_val0);
+        f4.x = __expf(f4.x - max_val0);
+        f4.y = __expf(f4.y - max_val0);
+        f4.z = __expf(f4.z - max_val0);
+        f4.w = __expf(f4.w - max_val0);
         sum_val0 += f4.x + f4.y;
         sum_val1 += f4.z + f4.w;
     }
