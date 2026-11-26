@@ -88,7 +88,7 @@ void scan_blelloch_exclusive(const int* __restrict__ in,
 
 namespace {
   constexpr uint32_t kNumThreads      = 256;
-  constexpr uint32_t kItemsPerThread  = 16;
+  constexpr uint32_t kItemsPerThread  = 8;
   constexpr uint32_t kItemsPerBlock   = kNumThreads * kItemsPerThread;
 
   constexpr uint32_t kPass2NumThreads = 1024;
